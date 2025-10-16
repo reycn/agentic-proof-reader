@@ -54,30 +54,36 @@ class AgentResult:
 SYSTEM_TEMPLATES: dict[AgentName, str] = {
     "linguistic_polishing": (
         "You are a Linguistic Polishing Agent. Improve clarity, concision, "
-        "coherence, and linguistic logic without changing meaning."
+        "coherence, and linguistic logic without changing meaning. Do not "
+        "care about other issues (set importance as 0)."
     ),
     "econometric_validation": (
         "You are an Econometric Validation Agent. Identify weaknesses in "
         "sampling, model specification, identification, operationalization, "
-        "interpretation, presentation, and discussion of results."
+        "interpretation, presentation, and discussion of results. Do not "
+        "care about other issues (set importance as 0)."
     ),
     "theorization": (
         "You are a Theorization Agent. Evaluate paragraph structure, logical "
-        "progression, engagement with literature, and integration/paraphrasing "
-        "of results."
+        "progression, engagement with literature, and integration/paraphrasing"
+        " of results. Do not "
+        "care about other issues (set importance as 0)."
     ),
     "precision": (
         "You are a Precision Agent. Detect grammatical errors, inconsistent "
-        "notations, and contradictory statements."
+        "notations, and contradictory statements. Do not "
+        "care about other issues (set importance as 0)."
     ),
     "logical_reasoning": (
         "You are a Logical Reasoning Agent. Identify topic sentences, "
         "sub-arguments, supporting evidence, and assess logical connections; "
-        "highlight missing assumptions."
+        "highlight missing assumptions. Do not "
+        "care about other issues (set importance as 0)."
     ),
     "clarification": (
         "You are a Clarification Agent. Flag potential sources of confusion "
-        "from concepts, methods, data, or measurements."
+        "from concepts, methods, data, or measurements. Do not "
+        "care about other issues (set importance as 0)."
     ),
 }
 
@@ -526,6 +532,7 @@ def chunk_by_paragraphs(content: str) -> list[str]:
     2. Sentence endings followed by line breaks
     3. Content structure patterns (indentation, formatting)
     4. Minimum paragraph length and coherence
+    5. PDF-style line wrapping (lines that don't end with punctuation)
     """
     if not content.strip():
         return []
@@ -533,7 +540,10 @@ def chunk_by_paragraphs(content: str) -> list[str]:
     # Clean up the content first
     content = content.strip()
 
-    # Method 1: Split by explicit paragraph breaks (double newlines)
+    # Step 1: First, merge PDF-style wrapped lines that belong to the same paragraph
+    content = _merge_wrapped_lines(content)
+
+    # Step 2: Split by explicit paragraph breaks (double newlines)
     explicit_paragraphs = re.split(r"\n\s*\n+", content)
     paragraphs = []
 
@@ -542,11 +552,11 @@ def chunk_by_paragraphs(content: str) -> list[str]:
         if _is_valid_paragraph(para):
             paragraphs.append(para)
 
-    # Method 2: If we have few paragraphs, try more sophisticated detection
+    # Step 3: If we have few paragraphs, try more sophisticated detection
     if len(paragraphs) <= 1:
         paragraphs = _detect_paragraphs_by_structure(content)
 
-    # Method 3: If still no good paragraphs, use sentence-based chunking
+    # Step 4: If still no good paragraphs, use sentence-based chunking
     if len(paragraphs) <= 1:
         paragraphs = _detect_paragraphs_by_sentences(content)
 
@@ -558,6 +568,187 @@ def chunk_by_paragraphs(content: str) -> list[str]:
             valid_paragraphs.append(para)
 
     return valid_paragraphs if valid_paragraphs else [content]
+
+
+def _should_break_paragraph(prev_line: str, next_line: str) -> bool:
+    """
+    Determine if empty line between prev_line and next_line is a real
+    paragraph break or just formatting.
+
+    Returns True if it's a real paragraph break, False if lines should
+    be merged despite the empty line.
+    """
+    if not prev_line or not next_line:
+        return True
+
+    prev_line = prev_line.strip()
+    next_line = next_line.strip()
+
+    # If previous line ends with proper sentence punctuation
+    # and next starts with capital, likely a real break
+    if re.search(r"[.!?]\s*$", prev_line) and re.match(r"^[A-Z]", next_line):
+        # But check for continuation patterns
+        # e.g., "See Fig. 1.\n\nThe results show..." should stay together
+        common_abbrev = re.search(
+            r"\b(Fig|fig|Table|table|e\.g|i\.e|Dr|Mr|Mrs|Ms|vs|etc)\.?\s*\d*\.?\s*$",
+            prev_line,
+        )
+        if common_abbrev:
+            return False
+        return True
+
+    # If previous line doesn't end with punctuation, probably continue
+    if not re.search(r"[.!?:;,]\s*$", prev_line):
+        return False
+
+    # Both lines very short (< 50 chars) might be list items or titles
+    if len(prev_line) < 50 and len(next_line) < 50:
+        return False
+
+    # If next line starts with lowercase, definitely continuation
+    if re.match(r"^[a-z]", next_line):
+        return False
+
+    # If next line is numbered/bulleted list item, it's a break
+    if re.match(r"^\s*[\d]+[\.\)]\s", next_line):
+        return True
+    if re.match(r"^\s*[-*+]\s", next_line):
+        return True
+
+    # Default: trust the double newline as a break
+    return True
+
+
+def _merge_wrapped_lines(content: str) -> str:
+    """
+    Merge lines that belong to the same paragraph (common in PDF extracts).
+
+    PDFs often break lines mid-sentence for formatting reasons. This
+    function intelligently merges such lines while preserving actual
+    paragraph breaks.
+
+    Rules:
+    1. Lines ending with sentence punctuation (.!?:;) are kept separate
+    2. Lines ending mid-word or without punctuation are merged
+    3. Double newlines may or may not indicate paragraph breaks
+       (depends on context)
+    4. Lines with very different indentation suggest new paragraphs
+    """
+    lines = content.split("\n")
+    merged_lines = []
+    i = 0
+
+    while i < len(lines):
+        current_line = lines[i].rstrip()
+
+        # Skip empty lines and check if they're real paragraph breaks
+        if not current_line:
+            # Look ahead to see if this is a real paragraph break
+            if (
+                i + 1 < len(lines)
+                and merged_lines
+                and _should_break_paragraph(
+                    merged_lines[-1],
+                    lines[i + 1] if i + 1 < len(lines) else "",
+                )
+            ):
+                merged_lines.append("")
+            # Otherwise skip the empty line (just formatting)
+            i += 1
+            continue
+
+        # Start building a paragraph
+        paragraph_parts = [current_line]
+        i += 1
+
+        # Look ahead and merge lines (including across empty lines if needed)
+        while i < len(lines):
+            next_line = lines[i].rstrip()
+
+            # Empty line - check if it's a real break
+            if not next_line:
+                # Check if this empty line is a real paragraph break
+                # by looking at what comes after
+                if i + 1 < len(lines):
+                    current_para = " ".join(paragraph_parts)
+                    next_content = lines[i + 1].rstrip()
+                    if next_content and _should_break_paragraph(
+                        current_para, next_content
+                    ):
+                        # Real break, stop merging
+                        break
+                    # Not a real break, skip empty line and continue
+                    i += 1
+                    continue
+                else:
+                    # End of content
+                    break
+
+            prev_line = paragraph_parts[-1]
+
+            # Check if previous line ends with sentence-ending punctuation
+            ends_with_sentence = re.search(r"[.!?:;]\s*$", prev_line)
+
+            # Check if next line starts a new structural element
+            starts_new_structure = (
+                re.match(r"^\s*\d+[\.\)]\s", next_line)  # Numbered list
+                or re.match(r"^\s*[-*+]\s", next_line)  # Bullet point
+                or re.match(r"^\s*#{1,6}\s", next_line)  # Markdown heading
+                or re.match(
+                    r"^[A-Z][^.!?]{0,50}:\s*$", next_line
+                )  # Section header with colon
+            )
+
+            # Check for significant indentation change
+            prev_indent = len(prev_line) - len(prev_line.lstrip())
+            next_indent = len(next_line) - len(next_line.lstrip())
+            indent_change = abs(next_indent - prev_indent) > 2
+
+            # Check if next line starts with capital
+            # (might be new sentence/paragraph)
+            next_starts_capital = re.match(r"^\s*[A-Z]", next_line)
+
+            # Decide whether to merge or break
+            should_break = False
+
+            if starts_new_structure:
+                # Definitely a new paragraph
+                should_break = True
+            elif (
+                ends_with_sentence
+                and next_starts_capital
+                and not prev_line.endswith(",")
+            ):
+                # Sentence ended and next starts with capital
+                # likely new paragraph. But keep merging if previous line
+                # ends with comma (list continuation)
+                should_break = True
+            elif indent_change and ends_with_sentence:
+                # Indentation changed and sentence ended
+                # likely new paragraph
+                should_break = True
+
+            if should_break:
+                break
+
+            # Merge the lines
+            # Add space between lines unless previous ends with hyphen
+            if prev_line.endswith("-"):
+                # Remove hyphen and merge directly (dehyphenate)
+                paragraph_parts[-1] = prev_line[:-1]
+                paragraph_parts.append(next_line.lstrip())
+            else:
+                # Add space between lines
+                paragraph_parts.append(next_line)
+
+            i += 1
+
+        # Join the paragraph parts with spaces
+        merged_paragraph = " ".join(paragraph_parts)
+        merged_lines.append(merged_paragraph)
+
+    # Join with double newlines to preserve paragraph structure
+    return "\n\n".join(line for line in merged_lines if line)
 
 
 def _is_valid_paragraph(text: str) -> bool:

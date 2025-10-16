@@ -198,12 +198,19 @@ async def analyze_distributed(file: UploadFile) -> JSONResponse:
         text = parse_file_bytes(file.filename, data)
         print(text) if text else print("No text found")
 
-        # Send parsed text immediately
+        # Send chunked paragraphs as parsed text
+        from .agents import chunk_by_paragraphs
+
+        chunks = chunk_by_paragraphs(text)
+        chunked_text = "\n\n".join(
+            [f"Paragraph {i+1}:\n{chunk}" for i, chunk in enumerate(chunks)]
+        )
+
         await manager.broadcast(
             {
                 "stage": "parsed_text",
-                "detail": f"Parsed {len(text)} characters",
-                "parsed_text": text,
+                "detail": f"Chunked into {len(chunks)} paragraphs",
+                "parsed_text": chunked_text,
             }
         )
 
