@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     llm_provider: str = "openai"  # openai | anthropic | gemini | ollama
 
     openai_api_key: str | None = None
-    openai_model: str = "gpt-5-mini"
+    openai_model: str = "gpt-4o-mini"
 
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-3-5-sonnet-20240620"

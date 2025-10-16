@@ -198,6 +198,15 @@ async def analyze_distributed(file: UploadFile) -> JSONResponse:
         text = parse_file_bytes(file.filename, data)
         print(text) if text else print("No text found")
 
+        # Send parsed text immediately
+        await manager.broadcast(
+            {
+                "stage": "parsed_text",
+                "detail": f"Parsed {len(text)} characters",
+                "parsed_text": text,
+            }
+        )
+
         await report_progress("distributed_agents", "running distributed analysis")
         chunk_results = await run_all_agents_distributed(
             text,

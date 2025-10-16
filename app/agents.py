@@ -1,3 +1,12 @@
+"""
+Author: Rongxin rongxin@u.nus.edu
+Date: 2025-10-16 16:17:33
+LastEditors: Rongxin rongxin@u.nus.edu
+LastEditTime: 2025-10-16 20:58:37
+FilePath: /agentic-proof-reader/app/agents.py
+Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -78,7 +87,7 @@ def _format_user_prompt(content: str) -> str:
         "Analyze the following manuscript excerpt and produce a response "
         "exactly in this schema:\n"
         "Problem: <identify the problem succinctly>\n"
-        "Importance: <0|1|2 where 0=low, 1=medium, 2=high>\n"
+        "Importance: <1|2|3|4|5|6|7|8|9|10 where 1=lowest, 10=highest>\n"
         "Location of problem: <quote up to 2 sentences, max 500 chars>\n"
         "Suggestion (brief): <one or two sentences>\n"
         "Revised: <suggested improved sentence(s), truncate to 500 chars>\n\n"
@@ -161,7 +170,7 @@ async def _run_all_agents_asyncio(
             r = AgentResult(
                 name=name_for_task,
                 problem=f"Agent error: {exc}",
-                importance=1,
+                importance=5,
                 location="",
                 suggestion_brief="Retry or check provider/API keys.",
                 revised="",
@@ -181,7 +190,7 @@ async def _run_all_agents_asyncio(
             r = AgentResult(
                 name=n,
                 problem="Agent timed out.",
-                importance=1,
+                importance=5,
                 location="",
                 suggestion_brief="Increase timeout or check provider availability.",
                 revised="",
@@ -198,7 +207,7 @@ def _praison_prompt(name: AgentName, content: str) -> str:
     instruction = (
         "Analyze the following manuscript excerpt and produce a response exactly in this schema:\n"
         "Problem: <identify the problem succinctly>\n"
-        "Importance: <0|1|2 where 0=low, 1=medium, 2=high>\n"
+        "Importance: <1|2|3|4|5|6|7|8|9|10 where 1=lowest, 10=highest>\n"
         "Location of problem: <quote up to 2 sentences, max 500 chars>\n"
         "Suggestion (brief): <one or two sentences>\n"
         "Revised: <suggested improved sentence(s), truncate to 500 chars>\n\n"
@@ -239,7 +248,7 @@ async def _run_all_agents_praison(
             expected_output=(
                 "Five labeled fields on separate lines:\n"
                 "Problem: ...\n"
-                "Importance: 0|1|2\n"
+                "Importance: 1|2|3|4|5|6|7|8|9|10\n"
                 "Location of problem: ...\n"
                 "Suggestion (brief): ...\n"
                 "Revised: ..."
@@ -280,7 +289,7 @@ async def _run_all_agents_praison(
             r = AgentResult(
                 name=name,
                 problem="Agent timed out.",
-                importance=1,
+                importance=5,
                 location="",
                 suggestion_brief="Increase timeout or check provider availability.",
                 revised="",
@@ -295,7 +304,7 @@ async def _run_all_agents_praison(
             r = AgentResult(
                 name=name,
                 problem=f"Agent error: {exc}",
-                importance=1,
+                importance=5,
                 location="",
                 suggestion_brief="Retry or check provider/API keys.",
                 revised="",
@@ -445,7 +454,7 @@ async def run_all_agents_distributed(
             error_result = AgentResult(
                 name=task.agent_name,
                 problem=f"Task error: {exc}",
-                importance=1,
+                importance=5,
                 location="",
                 suggestion_brief="Retry or check provider availability.",
                 revised="",
@@ -479,7 +488,7 @@ async def run_all_agents_distributed(
                 error_result = AgentResult(
                     name=task.agent_name,
                     problem=f"Task exception: {result}",
-                    importance=1,
+                    importance=5,
                     location="",
                     suggestion_brief="Check system logs.",
                     revised="",
@@ -509,40 +518,169 @@ async def run_all_agents_distributed(
 
 
 def chunk_by_paragraphs(content: str) -> list[str]:
-    """Split content into paragraphs, filtering out empty ones."""
-    # Split by double newlines first, then by single newlines if needed
+    """
+    Split content into real, continuous paragraphs using intelligent detection.
+
+    This function identifies actual paragraphs by looking for:
+    1. Double line breaks (traditional paragraph breaks)
+    2. Sentence endings followed by line breaks
+    3. Content structure patterns (indentation, formatting)
+    4. Minimum paragraph length and coherence
+    """
+    if not content.strip():
+        return []
+
+    # Clean up the content first
+    content = content.strip()
+
+    # Method 1: Split by explicit paragraph breaks (double newlines)
+    explicit_paragraphs = re.split(r"\n\s*\n+", content)
     paragraphs = []
 
-    # Try splitting by double newlines (paragraph breaks)
-    chunks = re.split(r"\n\s*\n", content.strip())
+    for para in explicit_paragraphs:
+        para = para.strip()
+        if _is_valid_paragraph(para):
+            paragraphs.append(para)
 
-    for chunk in chunks:
-        chunk = chunk.strip()
-        if chunk and len(chunk) > 50:  # Filter out very short chunks
-            paragraphs.append(chunk)
+    # Method 2: If we have few paragraphs, try more sophisticated detection
+    if len(paragraphs) <= 1:
+        paragraphs = _detect_paragraphs_by_structure(content)
 
-    # If no paragraphs found, try splitting by single newlines
-    if not paragraphs:
-        chunks = content.split("\n")
-        current_paragraph = []
+    # Method 3: If still no good paragraphs, use sentence-based chunking
+    if len(paragraphs) <= 1:
+        paragraphs = _detect_paragraphs_by_sentences(content)
 
-        for line in chunks:
-            line = line.strip()
-            if line:
-                current_paragraph.append(line)
-            elif current_paragraph:
-                paragraph = " ".join(current_paragraph)
-                if len(paragraph) > 50:
-                    paragraphs.append(paragraph)
-                current_paragraph = []
+    # Filter and clean up paragraphs
+    valid_paragraphs = []
+    for para in paragraphs:
+        para = _clean_paragraph(para)
+        if _is_valid_paragraph(para):
+            valid_paragraphs.append(para)
 
-        # Add the last paragraph if it exists
-        if current_paragraph:
-            paragraph = " ".join(current_paragraph)
-            if len(paragraph) > 50:
-                paragraphs.append(paragraph)
+    return valid_paragraphs if valid_paragraphs else [content]
 
-    return paragraphs if paragraphs else [content]  # Fallback to original content
+
+def _is_valid_paragraph(text: str) -> bool:
+    """Check if text qualifies as a valid paragraph."""
+    if not text or len(text.strip()) < 50:
+        return False
+
+    # Must have at least one sentence (contains sentence-ending punctuation)
+    if not re.search(r"[.!?]", text):
+        return False
+
+    # Should not be just formatting or metadata
+    if re.match(r"^[#*\-+\s\d\.]+$", text):
+        return False
+
+    # Should contain actual words (not just symbols/numbers)
+    words = re.findall(r"\b[a-zA-Z]+\b", text)
+    if len(words) < 5:
+        return False
+
+    return True
+
+
+def _clean_paragraph(text: str) -> str:
+    """Clean up a paragraph by removing excessive whitespace and formatting."""
+    # Normalize whitespace
+    text = re.sub(r"\s+", " ", text)
+
+    # Remove excessive punctuation
+    text = re.sub(r"[.]{3,}", "...", text)
+
+    # Remove leading/trailing whitespace
+    text = text.strip()
+
+    return text
+
+
+def _detect_paragraphs_by_structure(content: str) -> list[str]:
+    """Detect paragraphs based on structural patterns."""
+    lines = content.split("\n")
+    paragraphs = []
+    current_para = []
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            # Empty line - potential paragraph break
+            if current_para:
+                para_text = " ".join(current_para)
+                if _is_valid_paragraph(para_text):
+                    paragraphs.append(para_text)
+                current_para = []
+        else:
+            # Check for paragraph indicators
+            is_new_paragraph = False
+
+            # Indented lines might start new paragraphs
+            if line.startswith("    ") or line.startswith("\t"):
+                if current_para:
+                    para_text = " ".join(current_para)
+                    if _is_valid_paragraph(para_text):
+                        paragraphs.append(para_text)
+                    current_para = []
+                is_new_paragraph = True
+
+            # Lines starting with numbers/bullets might be new paragraphs
+            elif re.match(r"^\d+[\.\)]\s", line) or re.match(r"^[-*+]\s", line):
+                if current_para:
+                    para_text = " ".join(current_para)
+                    if _is_valid_paragraph(para_text):
+                        paragraphs.append(para_text)
+                    current_para = []
+                is_new_paragraph = True
+
+            # Very long lines might be separate paragraphs
+            elif current_para and len(line) > 200:
+                para_text = " ".join(current_para)
+                if _is_valid_paragraph(para_text):
+                    paragraphs.append(para_text)
+                current_para = [line]
+                is_new_paragraph = True
+
+            if not is_new_paragraph:
+                current_para.append(line)
+
+    # Add the last paragraph
+    if current_para:
+        para_text = " ".join(current_para)
+        if _is_valid_paragraph(para_text):
+            paragraphs.append(para_text)
+
+    return paragraphs
+
+
+def _detect_paragraphs_by_sentences(content: str) -> list[str]:
+    """Detect paragraphs based on sentence patterns."""
+    # Split into sentences
+    sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z])", content)
+
+    paragraphs = []
+    current_para = []
+
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+
+        current_para.append(sentence)
+
+        # Create paragraph when we have enough sentences or reach natural breaks
+        if len(current_para) >= 3:  # Minimum 3 sentences per paragraph
+            para_text = " ".join(current_para)
+            if _is_valid_paragraph(para_text):
+                paragraphs.append(para_text)
+                current_para = []
+
+    # Add remaining sentences as final paragraph
+    if current_para:
+        para_text = " ".join(current_para)
+        if _is_valid_paragraph(para_text):
+            paragraphs.append(para_text)
+
+    return paragraphs
 
 
 def _strip_md(s: str) -> str:
@@ -569,13 +707,20 @@ def _parse_agent_response(text: str) -> tuple[str, int, str, str, str]:
                     return ""
 
                 problem = g("problem")
-                imp_raw = g("importance") or "1"
+                imp_raw = g("importance") or "5"
                 # Accept numeric or textual
                 try:
                     importance = int(str(imp_raw).strip())
                 except Exception:
                     txt = str(imp_raw).lower().strip()
-                    importance = {"low": 0, "medium": 1, "high": 2}.get(txt, 1)
+                    # Map old textual values to new scale
+                    importance = {
+                        "low": 3,
+                        "lowest": 1,
+                        "medium": 5,
+                        "high": 8,
+                        "highest": 10,
+                    }.get(txt, 5)
                 location = g(
                     "location of problem",
                     "location",
@@ -585,7 +730,7 @@ def _parse_agent_response(text: str) -> tuple[str, int, str, str, str]:
                 )
                 sugg = g("suggestion (brief)", "suggestion", "suggestion_brief")
                 revised = g("revised", "revised sentences")
-                importance = max(0, min(2, importance))
+                importance = max(1, min(10, importance))
                 return (
                     problem.strip(),
                     importance,
@@ -633,13 +778,15 @@ def _parse_agent_response(text: str) -> tuple[str, int, str, str, str]:
         else:
             found[key] = val
     problem = found["problem"].strip()
-    imp_raw = found["importance"].strip() or "1"
+    imp_raw = found["importance"].strip() or "5"
     try:
         importance = int(imp_raw)
     except Exception:
         txt = imp_raw.lower()
-        importance = {"low": 0, "medium": 1, "high": 2}.get(txt, 1)
-    importance = max(0, min(2, importance))
+        importance = {"low": 3, "lowest": 1, "medium": 5, "high": 8, "highest": 10}.get(
+            txt, 5
+        )
+    importance = max(1, min(10, importance))
     location = found["location of problem"].strip()
     sugg = found["suggestion (brief)"].strip()
     revised = found["revised"].strip()

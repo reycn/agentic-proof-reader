@@ -14,15 +14,15 @@
           <div class="flex items-center gap-3">
             <div class="h-8 w-8 rounded bg-black text-white grid place-items-center font-bold">A</div>
             <h1 class="text-xl font-semibold">Agentic Proof Reader</h1>
-            <span class="ml-3 text-xs text-gray-500">Dev</span>
+            <!-- <span class="ml-3 text-xs text-gray-500">Dev</span> -->
           </div>
           <div class="flex items-center gap-3">
-            <span class="text-sm text-gray-600">API</span>
+            <span class="text-sm text-gray-600"></span>
             <span :class="['inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs', health==='ok' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700']">
               <span class="inline-block h-2 w-2 rounded-full" :class="health==='ok' ? 'bg-green-500' : 'bg-red-500'"></span>
-              {{ health==='ok' ? 'healthy' : 'down' }}
+              {{ health==='ok' ? 'ONLINE' : 'OFFLINE' }}
             </span>
-            <button @click="checkHealth" class="text-sm px-3 py-1.5 border rounded hover:bg-gray-50">Check</button>
+            <!-- <button @click="checkHealth" class="text-sm px-3 py-1.5 border rounded hover:bg-gray-50">Check</button> -->
           </div>
         </div>
       </header>
@@ -31,30 +31,25 @@
         <section class="bg-white border rounded-lg shadow-sm">
           <div class="p-5 border-b">
             <h2 class="text-lg font-semibold">Upload</h2>
-            <p class="text-sm text-gray-600 mt-1">PDF, LaTeX, Markdown. Drag & drop or choose a file.</p>
+            <!-- <p class="text-sm text-gray-600 mt-1">PDF, LaTeX, Markdown. Drag & drop or choose a file.</p> -->
           </div>
           <div class="p-5">
             <div
               @dragover.prevent
               @drop.prevent="onDrop"
-              class="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:bg-gray-50"
+              class="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:bg-gray-50 min-h-48 flex items-center justify-center"
               @click="fileInput?.click()"
             >
               <input type="file" ref="fileInput" class="hidden" accept=".pdf,.tex,.md,.markdown,.txt" @change="onFileChange" />
               <div class="text-gray-700">
-                <div class="text-sm" v-if="!selectedName">Drop file here or click to browse</div>
+                <div class="text-sm text-gray-300" v-if="!selectedName">Drop file here or click to browse<br/>PDF, LaTeX, Markdown</div>
                 <div v-else class="text-sm"><span class="font-medium">{{ selectedName }}</span> <span class="text-gray-500">{{ selectedSize }}</span></div>
               </div>
             </div>
-            <div class="mt-4 flex items-center gap-3">
-              <label class="inline-flex items-center gap-2 text-sm">
-                <input type="checkbox" v-model="useDistributed" />
-                Distributed analysis (chunk by paragraphs)
-              </label>
-            </div>
+            <!-- Distributed analysis is now the default and always enabled -->
             <div class="mt-3 flex items-center gap-3">
               <button :disabled="loading || !selectedFile" @click="onSubmit" class="px-4 py-2 rounded bg-black text-white disabled:opacity-50">
-                {{ loading ? 'Analyzing…' : (useDistributed ? 'Analyze Distributed' : 'Analyze') }}
+                {{ loading ? 'Analyzing…' : 'Analyze' }}
               </button>
               <button :disabled="loading" @click="resetAll" class="px-3 py-2 rounded border hover:bg-gray-50 disabled:opacity-50">Clear</button>
               <button :disabled="!results.length && !chunkResults.length" @click="exportJSON" class="px-3 py-2 rounded border hover:bg-gray-50 disabled:opacity-50">Export JSON</button>
@@ -85,21 +80,20 @@
         <section class="bg-white border rounded-lg shadow-sm">
           <div class="p-5 border-b flex items-center justify-between">
             <h2 class="text-lg font-semibold">Results</h2>
-            <div class="text-sm text-gray-600" v-if="results.length || chunkResults.length">
-              {{ useDistributed ? `${Object.keys(chunkResults).length} chunks, ${totalTasks} tasks` : `${results.length} agents` }}
+            <div class="flex items-center gap-4">
+              <div class="text-sm text-gray-600" v-if="chunkResults.length">
+                {{ Object.keys(chunkResults).length }} chunks, {{ totalTasks }} tasks
+              </div>
+              <label class="inline-flex items-center gap-2 text-sm">
+                <div class="relative inline-block w-10 h-6">
+                  <input type="checkbox" v-model="showImportantOnly" class="sr-only peer" />
+                  <div class="w-10 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-black-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-black"></div>
+                </div>
+                <span class="text-sm font-medium text-gray-700">Important only</span>
+              </label>
             </div>
           </div>
           <div class="p-5 space-y-4">
-            <div class="flex items-center gap-3">
-              <label class="inline-flex items-center gap-2 text-sm">
-                <input type="checkbox" v-model="showImportantOnly" />
-                Show important only
-              </label>
-              <label class="inline-flex items-center gap-2 text-sm" v-if="useDistributed">
-                <input type="checkbox" v-model="groupByChunk" />
-                Group by chunk
-              </label>
-            </div>
             <div v-if="showLogs && logs.length" class="bg-gray-50 border rounded p-3">
               <div class="flex items-center justify-between mb-2">
                 <h3 class="font-medium text-sm">Live logs</h3>
@@ -110,52 +104,27 @@
               </ul>
             </div>
 
-            <template v-if="!results.length && !chunkResults.length && !loading">
+            <template v-if="!chunkResults.length && !loading">
               <div class="text-sm text-gray-600">No results yet. Upload a file to begin.</div>
             </template>
 
-            <!-- Regular results view -->
-            <template v-if="!useDistributed">
-              <div v-for="r in filteredResults" :key="r.name" class="border rounded-lg">
-                <div class="px-4 py-2 border-b flex items-center justify-between bg-gray-50">
-                  <h3 class="font-semibold text-sm capitalize">{{ prettyName(r.name) }}</h3>
-                  <span class="ml-2 text-xs px-2 py-0.5 rounded-full" :class="importanceClass(r.importance)">{{ (r.importance ?? 1) }}</span>
-                  <div class="flex items-center gap-2">
-                    <button class="text-xs px-2 py-1 rounded border hover:bg-white" @click="copyText(r.revised)">Copy revised</button>
-                    <button class="text-xs px-2 py-1 rounded border hover:bg-white" @click="locate(r.location)">Locate</button>
+            <!-- Distributed results view (always enabled) -->
+            <div v-for="(chunk, chunkId) in filteredChunkResults" :key="chunkId" class="border rounded-lg">
+              <div class="p-4 space-y-3">
+                <div v-for="item in chunk" :key="`${chunkId}-${item.agent_name}`" class="border-l-4 pl-3" :class="importanceBorderClass(item.result.importance)">
+                  <div class="flex items-center justify-between mb-2">
+                    <h4 class="font-medium text-sm capitalize">{{ prettyName(item.agent_name) }}</h4>
+                    <span class="text-xs px-2 py-0.5 rounded-full" :class="importanceClass(item.result.importance)">{{ (item.result.importance ?? 5) }}</span>
                   </div>
-                </div>
-                <div class="p-4 space-y-2 text-sm">
-                  <div><span class="font-medium">Problem:</span> <span class="text-red-700">{{ r.problem }}</span></div>
-                  <div><span class="font-medium">Location:</span> <span class="text-gray-700">{{ r.location }}</span></div>
-                  <div><span class="font-medium">Suggestion (brief):</span> <span class="text-blue-700">{{ r.suggestion_brief }}</span></div>
-                  <div><span class="font-medium">Revised:</span> <span class="text-gray-800" v-html="r.highlighted"></span></div>
-                </div>
-              </div>
-            </template>
-
-            <!-- Distributed results view -->
-            <template v-if="useDistributed">
-              <div v-for="(chunk, chunkId) in filteredChunkResults" :key="chunkId" class="border rounded-lg">
-                <div class="px-4 py-2 border-b bg-gray-50">
-                  <h3 class="font-semibold text-sm">Chunk {{ parseInt(chunkId) + 1 }}</h3>
-                </div>
-                <div class="p-4 space-y-3">
-                  <div v-for="item in chunk" :key="`${chunkId}-${item.agent_name}`" class="border-l-4 pl-3" :class="importanceBorderClass(item.result.importance)">
-                    <div class="flex items-center justify-between mb-2">
-                      <h4 class="font-medium text-sm capitalize">{{ prettyName(item.agent_name) }}</h4>
-                      <span class="text-xs px-2 py-0.5 rounded-full" :class="importanceClass(item.result.importance)">{{ (item.result.importance ?? 1) }}</span>
-                    </div>
-                    <div class="space-y-1 text-sm">
-                      <div><span class="font-medium">Problem:</span> <span class="text-red-700">{{ item.result.problem }}</span></div>
-                      <div><span class="font-medium">Location:</span> <span class="text-gray-700">{{ item.result.location }}</span></div>
-                      <div><span class="font-medium">Suggestion:</span> <span class="text-blue-700">{{ item.result.suggestion_brief }}</span></div>
-                      <div><span class="font-medium">Revised:</span> <span class="text-gray-800" v-html="item.result.highlighted"></span></div>
-                    </div>
+                  <div class="space-y-1 text-sm">
+                    <div><span class="font-medium">Problem:</span> <span class="text-red-700">{{ item.result.problem }}</span></div>
+                    <div><span class="font-medium">Location:</span> <span class="text-gray-700">{{ item.result.location }}</span></div>
+                    <div><span class="font-medium">Suggestion:</span> <span class="text-blue-700">{{ item.result.suggestion_brief }}</span></div>
+                    <div><span class="font-medium">Revised:</span> <span class="text-gray-800" v-html="item.result.highlighted"></span></div>
                   </div>
                 </div>
               </div>
-            </template>
+            </div>
           </div>
         </section>
       </main>
@@ -175,9 +144,8 @@
           const loading = ref(false)
           const results = ref([])
           const chunkResults = ref({})
-          const useDistributed = ref(false)
+          const useDistributed = ref(true)  // Always enabled
           const showImportantOnly = ref(false)
-          const groupByChunk = ref(true)
           const progress = ref([])
           const parsed = ref('')
           const parsedBox = ref(null)
@@ -268,11 +236,11 @@
           const copyText = async (text) => { try { await navigator.clipboard.writeText(text || '') ; showToast('Copied') } catch {} }
 
           const exportJSON = () => {
-            const data = useDistributed.value ? chunkResults.value : results.value
+            const data = chunkResults.value
             const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
             const a = document.createElement('a')
             a.href = URL.createObjectURL(blob)
-            a.download = useDistributed.value ? 'agentic-proof-reader-chunk-results.json' : 'agentic-proof-reader-results.json'
+            a.download = 'agentic-proof-reader-results.json'
             a.click()
             URL.revokeObjectURL(a.href)
           }
@@ -300,6 +268,11 @@
                   const idx = results.value.findIndex(x => x.name === msg.result.name)
                   if (idx >= 0) results.value[idx] = msg.result
                   else results.value.push(msg.result)
+                }
+                
+                // Handle parsed text
+                if (msg.stage === 'parsed_text' && msg.parsed_text) {
+                  parsed.value = msg.parsed_text
                 }
                 
                 // Handle chunk results
@@ -339,28 +312,18 @@
             try {
               const form = new FormData()
               form.append('file', selectedFile.value)
-              const endpoint = useDistributed.value ? '/api/analyze-distributed' : '/api/analyze'
-              const resp = await fetch(endpoint, { method: 'POST', body: form })
+              const resp = await fetch('/api/analyze-distributed', { method: 'POST', body: form })
               if (!resp.ok) {
                 const txt = await resp.text()
                 logs.value.push(`HTTP ${resp.status}: ${txt}`)
                 throw new Error(`Analyze failed: ${resp.status}`)
               }
               const data = await resp.json()
-              parsed.value = data.parsed
+              // parsed.value is already set from WebSocket message
               
-              if (useDistributed.value) {
-                // Handle distributed results
-                chunkResults.value = data.chunks || {}
-                showLogs.value = false
-              } else {
-                // Keep any streamed results; merge with final payload
-                const names = new Set(results.value.map(r => r.name))
-                for (const r of data.results) {
-                  if (!names.has(r.name)) results.value.push(r)
-                }
-                showLogs.value = false
-              }
+              // Handle distributed results
+              chunkResults.value = data.chunks || {}
+              showLogs.value = false
             } catch (e) {
               logs.value.push(`Error: ${e?.message || e}`)
               showToast('Analyze failed')
@@ -382,11 +345,23 @@
             }
           }
 
-          const importanceClass = (imp) => ({ 0: 'bg-gray-100 text-gray-700', 1: 'bg-amber-100 text-amber-700', 2: 'bg-red-100 text-red-700' }[imp] || 'bg-gray-100 text-gray-700')
+          const importanceClass = (imp) => {
+            if (imp >= 8) return 'bg-red-100 text-red-700'
+            if (imp >= 6) return 'bg-orange-100 text-orange-700'
+            if (imp >= 4) return 'bg-amber-100 text-amber-700'
+            if (imp >= 2) return 'bg-yellow-100 text-yellow-700'
+            return 'bg-gray-100 text-gray-700'
+          }
           
-          const importanceBorderClass = (imp) => ({ 0: 'border-gray-300', 1: 'border-amber-300', 2: 'border-red-300' }[imp] || 'border-gray-300')
+          const importanceBorderClass = (imp) => {
+            if (imp >= 8) return 'border-red-300'
+            if (imp >= 6) return 'border-orange-300'
+            if (imp >= 4) return 'border-amber-300'
+            if (imp >= 2) return 'border-yellow-300'
+            return 'border-gray-300'
+          }
 
-          const filteredResults = Vue.computed(() => showImportantOnly.value ? results.value.filter(r => (r.importance ?? 1) === 2) : results.value)
+          const filteredResults = Vue.computed(() => showImportantOnly.value ? results.value.filter(r => (r.importance ?? 5) >= 8) : results.value)
           
           const totalTasks = Vue.computed(() => {
             let total = 0
@@ -397,12 +372,10 @@
           })
           
           const filteredChunkResults = Vue.computed(() => {
-            if (!useDistributed.value) return {}
-            
             const filtered = {}
             for (const [chunkId, chunk] of Object.entries(chunkResults.value)) {
               if (showImportantOnly.value) {
-                const importantOnly = chunk.filter(item => (item.result.importance ?? 1) === 2)
+                const importantOnly = chunk.filter(item => (item.result.importance ?? 5) >= 8)
                 if (importantOnly.length > 0) {
                   filtered[chunkId] = importantOnly
                 }
@@ -415,7 +388,7 @@
 
           return {
             fileInput, selectedFile, selectedName, selectedSize, loading, results, chunkResults, useDistributed, progress, parsed, parsedBox, logs, logsBox, showLogs, health, toast,
-            agentNames, agentStates, prettyName, badgeClass, dotClass, importanceClass, importanceBorderClass, showImportantOnly, groupByChunk, filteredResults, filteredChunkResults, totalTasks,
+            agentNames, agentStates, prettyName, badgeClass, dotClass, importanceClass, importanceBorderClass, showImportantOnly, filteredResults, filteredChunkResults, totalTasks,
             onSubmit, onDrop, onFileChange, locate, toggleLogs, resetAll, copyText, exportJSON, checkHealth
           }
         }
