@@ -80,6 +80,12 @@
             <div class="text-sm text-gray-600" v-if="results.length">{{ results.length }} agents</div>
           </div>
           <div class="p-5 space-y-4">
+            <div class="flex items-center gap-3">
+              <label class="inline-flex items-center gap-2 text-sm">
+                <input type="checkbox" v-model="showImportantOnly" />
+                Show important only
+              </label>
+            </div>
             <div v-if="showLogs && logs.length" class="bg-gray-50 border rounded p-3">
               <div class="flex items-center justify-between mb-2">
                 <h3 class="font-medium text-sm">Live logs</h3>
@@ -94,18 +100,19 @@
               <div class="text-sm text-gray-600">No results yet. Upload a file to begin.</div>
             </template>
 
-            <div v-for="r in results" :key="r.name" class="border rounded-lg">
+            <div v-for="r in filteredResults" :key="r.name" class="border rounded-lg">
               <div class="px-4 py-2 border-b flex items-center justify-between bg-gray-50">
                 <h3 class="font-semibold text-sm capitalize">{{ prettyName(r.name) }}</h3>
+                <span class="ml-2 text-xs px-2 py-0.5 rounded-full" :class="importanceClass(r.importance)">{{ (r.importance ?? 1) }}</span>
                 <div class="flex items-center gap-2">
                   <button class="text-xs px-2 py-1 rounded border hover:bg-white" @click="copyText(r.revised)">Copy revised</button>
-                  <button class="text-xs px-2 py-1 rounded border hover:bg-white" @click="locate(r.original)">Locate</button>
+                  <button class="text-xs px-2 py-1 rounded border hover:bg-white" @click="locate(r.location)">Locate</button>
                 </div>
               </div>
               <div class="p-4 space-y-2 text-sm">
-                <div><span class="font-medium">Original:</span> <span class="text-gray-700">{{ r.original }}</span></div>
                 <div><span class="font-medium">Problem:</span> <span class="text-red-700">{{ r.problem }}</span></div>
-                <div><span class="font-medium">Suggestion:</span> <span class="text-blue-700">{{ r.suggestion }}</span></div>
+                <div><span class="font-medium">Location:</span> <span class="text-gray-700">{{ r.location }}</span></div>
+                <div><span class="font-medium">Suggestion (brief):</span> <span class="text-blue-700">{{ r.suggestion_brief }}</span></div>
                 <div><span class="font-medium">Revised:</span> <span class="text-gray-800" v-html="r.highlighted"></span></div>
               </div>
             </div>
@@ -127,6 +134,7 @@
           const selectedSize = ref('')
           const loading = ref(false)
           const results = ref([])
+          const showImportantOnly = ref(false)
           const progress = ref([])
           const parsed = ref('')
           const parsedBox = ref(null)
@@ -241,6 +249,11 @@
                 progress.value.push(msg)
                 logs.value.push(`[${msg.stage}] ${msg.detail}`)
                 updateAgentState(msg.stage, msg.detail)
+                if (msg.stage === 'agent_result' && msg.result) {
+                  const idx = results.value.findIndex(x => x.name === msg.result.name)
+                  if (idx >= 0) results.value[idx] = msg.result
+                  else results.value.push(msg.result)
+                }
                 nextTick(() => { const el = logsBox.value; if (el) el.scrollTop = el.scrollHeight })
               } catch {}
             }
@@ -265,7 +278,11 @@
               }
               const data = await resp.json()
               parsed.value = data.parsed
-              results.value = data.results
+              // Keep any streamed results; merge with final payload
+              const names = new Set(results.value.map(r => r.name))
+              for (const r of data.results) {
+                if (!names.has(r.name)) results.value.push(r)
+              }
               showLogs.value = false
             } catch (e) {
               logs.value.push(`Error: ${e?.message || e}`)
@@ -288,9 +305,13 @@
             }
           }
 
+          const importanceClass = (imp) => ({ 0: 'bg-gray-100 text-gray-700', 1: 'bg-amber-100 text-amber-700', 2: 'bg-red-100 text-red-700' }[imp] || 'bg-gray-100 text-gray-700')
+
+          const filteredResults = Vue.computed(() => showImportantOnly.value ? results.value.filter(r => (r.importance ?? 1) === 2) : results.value)
+
           return {
             fileInput, selectedFile, selectedName, selectedSize, loading, results, progress, parsed, parsedBox, logs, logsBox, showLogs, health, toast,
-            agentNames, agentStates, prettyName, badgeClass, dotClass,
+            agentNames, agentStates, prettyName, badgeClass, dotClass, importanceClass, showImportantOnly, filteredResults,
             onSubmit, onDrop, onFileChange, locate, toggleLogs, resetAll, copyText, exportJSON, checkHealth
           }
         }

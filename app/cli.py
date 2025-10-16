@@ -37,7 +37,20 @@ def analyze(file: Path) -> None:
     )
     import json
 
-    print(json.dumps([r.__dict__ for r in results], ensure_ascii=False, indent=2))
+    payload = [
+        {
+            "name": r.name,
+            "problem": r.problem,
+            "importance": getattr(r, "importance", 1),
+            "location": getattr(r, "location", ""),
+            "suggestion_brief": getattr(r, "suggestion_brief", ""),
+            "revised": getattr(r, "revised", ""),
+            "suggestion": r.suggestion,
+            "highlighted": r.highlighted,
+        }
+        for r in results
+    ]
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 @cli.command()

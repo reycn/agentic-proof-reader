@@ -34,9 +34,10 @@ AgentName = Literal[
 @dataclass
 class AgentResult:
     name: AgentName
-    original: str
     problem: str
-    suggestion: str
+    importance: int  # 0=low, 1=medium, 2=high
+    location: str
+    suggestion_brief: str
     revised: str
     highlighted: str
 
@@ -76,16 +77,17 @@ def _format_user_prompt(content: str) -> str:
     return (
         "Analyze the following manuscript excerpt and produce a response "
         "exactly in this schema:\n"
-        "Original: <paste original>\n"
         "Problem: <identify the problem succinctly>\n"
-        "Suggestion: <provide specific actionable suggestion>\n"
-        "Revised version: <a fully revised version>; differences highlighted "
-        "with <mark> tags\n\n"
+        "Importance: <0|1|2 where 0=low, 1=medium, 2=high>\n"
+        "Location of problem: <quote up to 2 sentences, max 500 chars>\n"
+        "Suggestion (brief): <one or two sentences>\n"
+        "Revised: <suggested improved sentence(s), truncate to 500 chars>\n\n"
         "Text to analyze:\n" + content
     )
 
 
 ProgressCb = Optional[Callable[[str, str], Awaitable[None]]]
+ResultCb = Optional[Callable[["AgentResult"], Awaitable[None]]]
 
 
 async def run_agent(
@@ -100,19 +102,21 @@ async def run_agent(
     response = await provider.generate(system_prompt, user_prompt)
     elapsed = time.perf_counter() - start
 
-    original, problem, suggestion, revised = _parse_agent_response(
-        response, fallback_original=content[:1000]
-    )
-    if not original:
-        original = content[:1000]
-    if not revised:
-        revised = original
-    highlighted = highlight_differences(original, revised)
+    (
+        problem,
+        importance,
+        location,
+        suggestion_brief,
+        revised,
+    ) = _parse_agent_response(response)
+
+    highlighted = highlight_differences(location or content[:200], revised or location)
     result = AgentResult(
         name=name,
-        original=original,
         problem=problem,
-        suggestion=suggestion,
+        importance=importance,
+        location=location,
+        suggestion_brief=suggestion_brief,
         revised=revised,
         highlighted=highlighted,
     )
@@ -122,7 +126,11 @@ async def run_agent(
 
 
 async def _run_all_agents_asyncio(
-    content: str, *, timeout_seconds: int, progress_cb: ProgressCb
+    content: str,
+    *,
+    timeout_seconds: int,
+    progress_cb: ProgressCb,
+    result_cb: ResultCb,
 ) -> list[AgentResult]:
     names: list[AgentName] = [
         "linguistic_polishing",
@@ -142,21 +150,26 @@ async def _run_all_agents_asyncio(
 
     for t in done:
         try:
-            results.append(t.result())
+            r = t.result()
+            results.append(r)
+            if result_cb:
+                await result_cb(r)
         except Exception as exc:  # noqa: BLE001
             name_for_task: AgentName = next(k for k, v in tasks.items() if v is t)
             if progress_cb:
                 await progress_cb("agent_error", f"{name_for_task}: {exc}")
-            results.append(
-                AgentResult(
-                    name=name_for_task,
-                    original=content[:1000],
-                    problem=f"Agent error: {exc}",
-                    suggestion="Retry or check provider/API keys.",
-                    revised=content[:1000],
-                    highlighted=content[:1000],
-                )
+            r = AgentResult(
+                name=name_for_task,
+                problem=f"Agent error: {exc}",
+                importance=1,
+                location="",
+                suggestion_brief="Retry or check provider/API keys.",
+                revised="",
+                highlighted="",
             )
+            results.append(r)
+            if result_cb:
+                await result_cb(r)
 
     for n, t in tasks.items():
         if t in pending:
@@ -165,39 +178,47 @@ async def _run_all_agents_asyncio(
                 await progress_cb(
                     "agent_timeout", f"{n}: timeout after {timeout_seconds}s"
                 )
-            truncated = content[:1000]
-            results.append(
-                AgentResult(
-                    name=n,
-                    original=truncated,
-                    problem="Agent timed out (30s).",
-                    suggestion="Increase timeout or check provider availability.",
-                    revised=truncated,
-                    highlighted=truncated,
-                )
+            r = AgentResult(
+                name=n,
+                problem="Agent timed out.",
+                importance=1,
+                location="",
+                suggestion_brief="Increase timeout or check provider availability.",
+                revised="",
+                highlighted="",
             )
+            results.append(r)
+            if result_cb:
+                await result_cb(r)
 
     return results
 
 
 def _praison_prompt(name: AgentName, content: str) -> str:
-    # Use the same strict schema as asyncio path
     instruction = (
         "Analyze the following manuscript excerpt and produce a response exactly in this schema:\n"
-        "Original: <paste original>\n"
         "Problem: <identify the problem succinctly>\n"
-        "Suggestion: <provide specific actionable suggestion>\n"
-        "Revised version: <a fully revised version>; differences highlighted with <mark> tags\n\n"
+        "Importance: <0|1|2 where 0=low, 1=medium, 2=high>\n"
+        "Location of problem: <quote up to 2 sentences, max 500 chars>\n"
+        "Suggestion (brief): <one or two sentences>\n"
+        "Revised: <suggested improved sentence(s), truncate to 500 chars>\n\n"
     )
     return f"{SYSTEM_TEMPLATES[name]}\n\n{instruction}Text to analyze:\n{content}"
 
 
 async def _run_all_agents_praison(
-    content: str, *, timeout_seconds: int, progress_cb: ProgressCb
+    content: str,
+    *,
+    timeout_seconds: int,
+    progress_cb: ProgressCb,
+    result_cb: ResultCb,
 ) -> list[AgentResult]:
     if PraisonAgent is None or PraisonTask is None or PraisonAIAgents is None:
         return await _run_all_agents_asyncio(
-            content, timeout_seconds=timeout_seconds, progress_cb=progress_cb
+            content,
+            timeout_seconds=timeout_seconds,
+            progress_cb=progress_cb,
+            result_cb=result_cb,
         )
 
     names: list[AgentName] = [
@@ -209,8 +230,6 @@ async def _run_all_agents_praison(
         "clarification",
     ]
 
-    results: list[AgentResult] = []
-
     async def run_single(name: AgentName) -> AgentResult:
         if progress_cb:
             await progress_cb("agent_start", name)
@@ -218,8 +237,12 @@ async def _run_all_agents_praison(
         task = PraisonTask(
             description=_praison_prompt(name, content),
             expected_output=(
-                "Four labeled fields on separate lines: \n"
-                "Original: ...\nProblem: ...\nSuggestion: ...\nRevised version: ..."
+                "Five labeled fields on separate lines:\n"
+                "Problem: ...\n"
+                "Importance: 0|1|2\n"
+                "Location of problem: ...\n"
+                "Suggestion (brief): ...\n"
+                "Revised: ..."
             ),
             agent=agent,
         )
@@ -230,7 +253,6 @@ async def _run_all_agents_praison(
 
         def _run():
             ret = orchestrator.start()
-            # Try multiple places for output
             text = None
             for attr in ("output", "result", "response", "final_output"):
                 val = getattr(task, attr, None)
@@ -255,77 +277,90 @@ async def _run_all_agents_praison(
             if progress_cb:
                 await progress_cb("agent_done", f"{name} ({elapsed:.2f}s)")
         except asyncio.TimeoutError:
-            if progress_cb:
-                await progress_cb(
-                    "agent_timeout", f"{name}: timeout after {timeout_seconds}s"
-                )
-            truncated = content[:1000]
-            return AgentResult(
+            r = AgentResult(
                 name=name,
-                original=truncated,
-                problem="Agent timed out (30s).",
-                suggestion="Increase timeout or check provider availability.",
-                revised=truncated,
-                highlighted=truncated,
+                problem="Agent timed out.",
+                importance=1,
+                location="",
+                suggestion_brief="Increase timeout or check provider availability.",
+                revised="",
+                highlighted="",
             )
+            if result_cb:
+                await result_cb(r)
+            return r
         except Exception as exc:  # noqa: BLE001
             if progress_cb:
                 await progress_cb("agent_error", f"{name}: {exc}")
-            truncated = content[:1000]
-            return AgentResult(
+            r = AgentResult(
                 name=name,
-                original=truncated,
                 problem=f"Agent error: {exc}",
-                suggestion="Retry or check provider/API keys.",
-                revised=truncated,
-                highlighted=truncated,
+                importance=1,
+                location="",
+                suggestion_brief="Retry or check provider/API keys.",
+                revised="",
+                highlighted="",
             )
+            if result_cb:
+                await result_cb(r)
+            return r
 
-        original = content[:1000]
-        original, problem, suggestion, revised = _parse_agent_response(
-            response, fallback_original=original
+        problem, importance, location, suggestion_brief, revised = (
+            _parse_agent_response(response)
         )
-        highlighted = highlight_differences(original, revised)
-        return AgentResult(
+        highlighted = highlight_differences(
+            location or content[:200], revised or location
+        )
+        r = AgentResult(
             name=name,
-            original=original,
             problem=problem,
-            suggestion=suggestion,
+            importance=importance,
+            location=location,
+            suggestion_brief=suggestion_brief,
             revised=revised,
             highlighted=highlighted,
         )
+        if result_cb:
+            await result_cb(r)
+        return r
 
     tasks = [run_single(n) for n in names]
     return await asyncio.gather(*tasks)
 
 
 async def run_all_agents(
-    content: str, *, timeout_seconds: int, progress_cb: ProgressCb = None
+    content: str,
+    *,
+    timeout_seconds: int,
+    progress_cb: ProgressCb = None,
+    result_cb: ResultCb = None,
 ) -> list[AgentResult]:
     if settings.use_praison:
         return await _run_all_agents_praison(
-            content, timeout_seconds=timeout_seconds, progress_cb=progress_cb
+            content,
+            timeout_seconds=timeout_seconds,
+            progress_cb=progress_cb,
+            result_cb=result_cb,
         )
     return await _run_all_agents_asyncio(
-        content, timeout_seconds=timeout_seconds, progress_cb=progress_cb
+        content,
+        timeout_seconds=timeout_seconds,
+        progress_cb=progress_cb,
+        result_cb=result_cb,
     )
 
 
 def _strip_md(s: str) -> str:
     s = s.strip()
-    # remove leading list markers and bold/italics markers
     s = re.sub(r"^\s*[-*]\s*", "", s)
     s = re.sub(r"^\s*(?:\*\*|__)(.*?)(?:\*\*|__)\s*$", r"\1", s)
     return s.strip()
 
 
-def _parse_agent_response(
-    text: str, *, fallback_original: str
-) -> tuple[str, str, str, str]:
-    # Try JSON first (strip code fences)
+def _parse_agent_response(text: str) -> tuple[str, int, str, str, str]:
+    # JSON attempt
     cleaned = re.sub(r"```[\s\S]*?```", lambda m: m.group(0).strip("`"), text)
-    candidates = [cleaned, text]
-    for cand in candidates:
+    for cand in (cleaned, text):
         try:
             obj = json.loads(cand)
             if isinstance(obj, dict):
@@ -338,42 +373,79 @@ def _parse_agent_response(
                                 return v if isinstance(v, str) else json.dumps(v)
                     return ""
 
-                original = g("original") or fallback_original
                 problem = g("problem")
-                suggestion = g("suggestion")
-                revised = g("revised version", "revised", "revised_version") or original
+                imp_raw = g("importance") or "1"
+                # Accept numeric or textual
+                try:
+                    importance = int(str(imp_raw).strip())
+                except Exception:
+                    txt = str(imp_raw).lower().strip()
+                    importance = {"low": 0, "medium": 1, "high": 2}.get(txt, 1)
+                location = g(
+                    "location of problem",
+                    "location",
+                    "problem location",
+                    "problematic sentences",
+                    "problematic",
+                )
+                sugg = g("suggestion (brief)", "suggestion", "suggestion_brief")
+                revised = g("revised", "revised sentences")
+                importance = max(0, min(2, importance))
                 return (
-                    original.strip(),
                     problem.strip(),
-                    suggestion.strip(),
+                    importance,
+                    location.strip(),
+                    sugg.strip(),
                     revised.strip(),
                 )
         except Exception:
             pass
 
-    # Markdown/label parsing: capture between labels (case-insensitive)
+    # Label parsing
     labels = [
-        r"original",
         r"problem",
-        r"suggestion",
-        r"revised(?:\s+version)?",
+        r"importance",
+        r"location(?:\s+of\s+problem)?|problem(?:\s+location)?|problematic(?:\s+sentences?)?",
+        r"suggestion(?:\s*\(brief\))?",
+        r"revised(?:\s+sentences?)?",
     ]
     pattern = re.compile(
-        r"(?is)^[ \t]*[-*]?[ \t]*(?:\*\*|__)?(original|problem|suggestion|revised(?:\s+version)?)(?:\*\*|__)?[ \t]*:[ \t]*(.*?)(?=^[ \t]*[-*]?[ \t]*(?:\*\*|__)?(?:"
+        r"(?is)^[ \t]*[-*]?[ \t]*(?:\*\*|__)?(problem|importance|location(?:\s+of\s+problem)?|problem(?:\s+location)?|problematic(?:\s+sentences?)?|suggestion(?:\s*\(brief\))?|revised(?:\s+sentences?)?)(?:\*\*|__)?[ \t]*:[ \t]*(.*?)(?=^[ \t]*[-*]?[ \t]*(?:\*\*|__)?(?:"
         + r"|".join(labels)
         + r")(?:\*\*|__)?[ \t]*:|\Z)",
         re.M,
     )
-    found = {"original": "", "problem": "", "suggestion": "", "revised version": ""}
+    found = {
+        "problem": "",
+        "importance": "",
+        "location of problem": "",
+        "suggestion (brief)": "",
+        "revised": "",
+    }
     for m in pattern.finditer(text):
-        key = m.group(1).lower().replace("  ", " ")
+        key = m.group(1).lower()
         val = _strip_md(m.group(2))
-        if key.startswith("revised"):
-            found["revised version"] = val
+        if (
+            key.startswith("location")
+            or key.startswith("problem ")
+            or key.startswith("problematic")
+        ):
+            found["location of problem"] = val
+        elif key.startswith("suggestion"):
+            found["suggestion (brief)"] = val
+        elif key.startswith("revised"):
+            found["revised"] = val
         else:
             found[key] = val
-    original = (found["original"] or fallback_original).strip()
     problem = found["problem"].strip()
-    suggestion = found["suggestion"].strip()
-    revised = (found["revised version"] or original).strip()
-    return original, problem, suggestion, revised
+    imp_raw = found["importance"].strip() or "1"
+    try:
+        importance = int(imp_raw)
+    except Exception:
+        txt = imp_raw.lower()
+        importance = {"low": 0, "medium": 1, "high": 2}.get(txt, 1)
+    importance = max(0, min(2, importance))
+    location = found["location of problem"].strip()
+    sugg = found["suggestion (brief)"].strip()
+    revised = found["revised"].strip()
+    return problem, importance, location, sugg, revised

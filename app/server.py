@@ -96,6 +96,25 @@ async def analyze(file: UploadFile) -> JSONResponse:
     async def cb(stage: str, detail: str) -> None:
         await report_progress(stage, detail)
 
+    async def rb(result) -> None:
+        # Stream each agent result as it completes
+        await manager.broadcast(
+            {
+                "stage": "agent_result",
+                "detail": result.name,
+                "result": {
+                    "name": result.name,
+                    "problem": result.problem,
+                    "importance": result.importance,
+                    "location": result.location,
+                    "suggestion_brief": result.suggestion_brief,
+                    "revised": result.revised,
+                    "suggestion": result.suggestion_brief,
+                    "highlighted": result.highlighted,
+                },
+            }
+        )
+
     try:
         await report_progress("upload", f"received {file.filename}")
         data = await file.read()
@@ -107,6 +126,7 @@ async def analyze(file: UploadFile) -> JSONResponse:
             text,
             timeout_seconds=settings.agent_timeout_seconds,
             progress_cb=cb,
+            result_cb=rb,
         )
         await report_progress("done", "completed or timed out")
         return JSONResponse(
@@ -115,10 +135,12 @@ async def analyze(file: UploadFile) -> JSONResponse:
                 "results": [
                     {
                         "name": r.name,
-                        "original": r.original,
                         "problem": r.problem,
-                        "suggestion": r.suggestion,
+                        "importance": r.importance,
+                        "location": r.location,
+                        "suggestion_brief": r.suggestion_brief,
                         "revised": r.revised,
+                        "suggestion": r.suggestion_brief,
                         "highlighted": r.highlighted,
                     }
                     for r in results
