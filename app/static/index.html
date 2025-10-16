@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agentic Proof Reader</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  </head>
+  <body class="bg-gray-50">
+    <div id="app" class="min-h-screen">
+      <header class="bg-white/70 backdrop-blur border-b">
+        <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <div class="h-8 w-8 rounded bg-black text-white grid place-items-center font-bold">A</div>
+            <h1 class="text-xl font-semibold">Agentic Proof Reader</h1>
+            <span class="ml-3 text-xs text-gray-500">Dev</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="text-sm text-gray-600">API</span>
+            <span :class="['inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs', health==='ok' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700']">
+              <span class="inline-block h-2 w-2 rounded-full" :class="health==='ok' ? 'bg-green-500' : 'bg-red-500'"></span>
+              {{ health==='ok' ? 'healthy' : 'down' }}
+            </span>
+            <button @click="checkHealth" class="text-sm px-3 py-1.5 border rounded hover:bg-gray-50">Check</button>
+          </div>
+        </div>
+      </header>
+
+      <main class="max-w-7xl mx-auto px-6 py-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <section class="bg-white border rounded-lg shadow-sm">
+          <div class="p-5 border-b">
+            <h2 class="text-lg font-semibold">Upload</h2>
+            <p class="text-sm text-gray-600 mt-1">PDF, LaTeX, Markdown. Drag & drop or choose a file.</p>
+          </div>
+          <div class="p-5">
+            <div
+              @dragover.prevent
+              @drop.prevent="onDrop"
+              class="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:bg-gray-50"
+              @click="fileInput?.click()"
+            >
+              <input type="file" ref="fileInput" class="hidden" accept=".pdf,.tex,.md,.markdown,.txt" @change="onFileChange" />
+              <div class="text-gray-700">
+                <div class="text-sm" v-if="!selectedName">Drop file here or click to browse</div>
+                <div v-else class="text-sm"><span class="font-medium">{{ selectedName }}</span> <span class="text-gray-500">{{ selectedSize }}</span></div>
+              </div>
+            </div>
+            <div class="mt-4 flex items-center gap-3">
+              <button :disabled="loading || !selectedFile" @click="onSubmit" class="px-4 py-2 rounded bg-black text-white disabled:opacity-50">{{ loading ? 'Analyzing…' : 'Analyze' }}</button>
+              <button :disabled="loading" @click="resetAll" class="px-3 py-2 rounded border hover:bg-gray-50 disabled:opacity-50">Clear</button>
+              <button :disabled="!results.length" @click="exportJSON" class="px-3 py-2 rounded border hover:bg-gray-50 disabled:opacity-50">Export JSON</button>
+              <button class="ml-auto text-sm text-gray-600 hover:text-gray-900" @click="toggleLogs">{{ showLogs ? 'Hide logs' : 'Show logs' }}</button>
+            </div>
+
+            <div class="mt-6">
+              <h3 class="text-sm font-medium text-gray-700 mb-2">Per-agent status</h3>
+              <div class="flex flex-wrap gap-2">
+                <template v-for="name in agentNames">
+                  <span :key="name" class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full"
+                        :class="badgeClass(agentStates[name]?.status)">
+                    <span class="inline-block h-1.5 w-1.5 rounded-full" :class="dotClass(agentStates[name]?.status)"></span>
+                    {{ prettyName(name) }}
+                    <span v-if="agentStates[name]?.duration" class="text-gray-600">({{ agentStates[name].duration }}s)</span>
+                  </span>
+                </template>
+              </div>
+            </div>
+
+            <div class="mt-6">
+              <h3 class="text-sm font-medium text-gray-700 mb-2">Parsed text</h3>
+              <div class="border rounded-lg p-3 h-356 overflow-auto text-sm whitespace-pre-wrap" ref="parsedBox">{{ parsed }}</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="bg-white border rounded-lg shadow-sm">
+          <div class="p-5 border-b flex items-center justify-between">
+            <h2 class="text-lg font-semibold">Results</h2>
+            <div class="text-sm text-gray-600" v-if="results.length">{{ results.length }} agents</div>
+          </div>
+          <div class="p-5 space-y-4">
+            <div v-if="showLogs && logs.length" class="bg-gray-50 border rounded p-3">
+              <div class="flex items-center justify-between mb-2">
+                <h3 class="font-medium text-sm">Live logs</h3>
+                <button class="text-xs text-gray-600 hover:text-gray-900" @click="logs=[]">Clear</button>
+              </div>
+              <ul class="text-xs font-mono text-gray-800 space-y-1 max-h-56 overflow-auto" ref="logsBox">
+                <li v-for="(l, i) in logs" :key="i">{{ l }}</li>
+              </ul>
+            </div>
+
+            <template v-if="!results.length && !loading">
+              <div class="text-sm text-gray-600">No results yet. Upload a file to begin.</div>
+            </template>
+
+            <div v-for="r in results" :key="r.name" class="border rounded-lg">
+              <div class="px-4 py-2 border-b flex items-center justify-between bg-gray-50">
+                <h3 class="font-semibold text-sm capitalize">{{ prettyName(r.name) }}</h3>
+                <div class="flex items-center gap-2">
+                  <button class="text-xs px-2 py-1 rounded border hover:bg-white" @click="copyText(r.revised)">Copy revised</button>
+                  <button class="text-xs px-2 py-1 rounded border hover:bg-white" @click="locate(r.original)">Locate</button>
+                </div>
+              </div>
+              <div class="p-4 space-y-2 text-sm">
+                <div><span class="font-medium">Original:</span> <span class="text-gray-700">{{ r.original }}</span></div>
+                <div><span class="font-medium">Problem:</span> <span class="text-red-700">{{ r.problem }}</span></div>
+                <div><span class="font-medium">Suggestion:</span> <span class="text-blue-700">{{ r.suggestion }}</span></div>
+                <div><span class="font-medium">Revised:</span> <span class="text-gray-800" v-html="r.highlighted"></span></div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <div v-if="toast" class="fixed bottom-4 right-4 bg-black text-white text-sm px-3 py-2 rounded shadow">{{ toast }}</div>
+    </div>
+
+    <script>
+      const { createApp, ref, onMounted, nextTick } = Vue
+
+      createApp({
+        setup() {
+          const fileInput = ref(null)
+          const selectedFile = ref(null)
+          const selectedName = ref('')
+          const selectedSize = ref('')
+          const loading = ref(false)
+          const results = ref([])
+          const progress = ref([])
+          const parsed = ref('')
+          const parsedBox = ref(null)
+          const logs = ref([])
+          const logsBox = ref(null)
+          const showLogs = ref(true)
+          const health = ref('unknown')
+          const toast = ref('')
+
+          const agentNames = [
+            'linguistic_polishing',
+            'econometric_validation',
+            'theorization',
+            'precision',
+            'logical_reasoning',
+            'clarification'
+          ]
+          const agentStates = ref(Object.fromEntries(agentNames.map(n => [n, { status: 'pending', duration: '' }])))
+
+          const prettyName = (n) => n.replaceAll('_',' ')
+          const badgeClass = (s) => ({
+            pending: 'bg-gray-100 text-gray-700',
+            running: 'bg-blue-100 text-blue-700',
+            done: 'bg-green-100 text-green-700',
+            timeout: 'bg-amber-100 text-amber-700',
+            error: 'bg-red-100 text-red-700'
+          }[s] || 'bg-gray-100 text-gray-700')
+          const dotClass = (s) => ({
+            pending: 'bg-gray-400',
+            running: 'bg-blue-500',
+            done: 'bg-green-500',
+            timeout: 'bg-amber-500',
+            error: 'bg-red-500'
+          }[s] || 'bg-gray-400')
+
+          const showToast = (msg) => { toast.value = msg; setTimeout(() => { toast.value = '' }, 1800) }
+
+          const parseAgentFromDetail = (stage, detail) => {
+            if (stage === 'agent_start') return detail
+            if (stage === 'agent_done') return (detail || '').split(' ')[0]
+            if (stage === 'agent_timeout' || stage === 'agent_error') return (detail || '').split(':')[0]
+            return ''
+          }
+
+          const updateAgentState = (stage, detail) => {
+            const name = parseAgentFromDetail(stage, detail)
+            if (!name || !agentStates.value[name]) return
+            if (stage === 'agent_start') agentStates.value[name].status = 'running'
+            if (stage === 'agent_done') {
+              agentStates.value[name].status = 'done'
+              const m = detail.match(/\(([^)]+)s\)/)
+              if (m) agentStates.value[name].duration = m[1]
+            }
+            if (stage === 'agent_timeout') agentStates.value[name].status = 'timeout'
+            if (stage === 'agent_error') agentStates.value[name].status = 'error'
+          }
+
+          const onFileChange = (ev) => {
+            const f = ev.target.files[0]
+            if (!f) return
+            selectedFile.value = f
+            selectedName.value = f.name
+            selectedSize.value = `${(f.size/1024).toFixed(1)} KB`
+          }
+
+          const onDrop = (ev) => {
+            const f = ev.dataTransfer.files?.[0]
+            if (!f) return
+            selectedFile.value = f
+            selectedName.value = f.name
+            selectedSize.value = `${(f.size/1024).toFixed(1)} KB`
+          }
+
+          const toggleLogs = () => { showLogs.value = !showLogs.value; nextTick(() => { const el = logsBox.value; if (el) el.scrollTop = el.scrollHeight }) }
+
+          const resetAll = () => {
+            selectedFile.value = null
+            selectedName.value = ''
+            selectedSize.value = ''
+            results.value = []
+            progress.value = []
+            parsed.value = ''
+            logs.value = []
+            agentStates.value = Object.fromEntries(agentNames.map(n => [n, { status: 'pending', duration: '' }]))
+          }
+
+          const copyText = async (text) => { try { await navigator.clipboard.writeText(text || '') ; showToast('Copied') } catch {} }
+
+          const exportJSON = () => {
+            const blob = new Blob([JSON.stringify(results.value, null, 2)], { type: 'application/json' })
+            const a = document.createElement('a')
+            a.href = URL.createObjectURL(blob)
+            a.download = 'agentic-proof-reader-results.json'
+            a.click()
+            URL.revokeObjectURL(a.href)
+          }
+
+          const checkHealth = async () => {
+            try {
+              const resp = await fetch('/health')
+              health.value = resp.ok ? 'ok' : 'down'
+              showToast(health.value === 'ok' ? 'API healthy' : 'API down')
+            } catch { health.value = 'down'; showToast('API down') }
+          }
+
+          onMounted(() => {
+            checkHealth()
+            const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/progress')
+            ws.onmessage = (evt) => {
+              try {
+                const msg = JSON.parse(evt.data)
+                progress.value.push(msg)
+                logs.value.push(`[${msg.stage}] ${msg.detail}`)
+                updateAgentState(msg.stage, msg.detail)
+                nextTick(() => { const el = logsBox.value; if (el) el.scrollTop = el.scrollHeight })
+              } catch {}
+            }
+          })
+
+          const onSubmit = async () => {
+            if (!selectedFile.value) return
+            loading.value = true
+            results.value = []
+            progress.value = []
+            parsed.value = ''
+            logs.value = []
+            agentStates.value = Object.fromEntries(agentNames.map(n => [n, { status: 'pending', duration: '' }]))
+            try {
+              const form = new FormData()
+              form.append('file', selectedFile.value)
+              const resp = await fetch('/api/analyze', { method: 'POST', body: form })
+              if (!resp.ok) {
+                const txt = await resp.text()
+                logs.value.push(`HTTP ${resp.status}: ${txt}`)
+                throw new Error(`Analyze failed: ${resp.status}`)
+              }
+              const data = await resp.json()
+              parsed.value = data.parsed
+              results.value = data.results
+              showLogs.value = false
+            } catch (e) {
+              logs.value.push(`Error: ${e?.message || e}`)
+              showToast('Analyze failed')
+            } finally {
+              loading.value = false
+            }
+          }
+
+          const locate = async (snippet) => {
+            if (!snippet) return
+            await nextTick()
+            const el = parsedBox.value
+            if (!el) return
+            const idx = el.textContent.indexOf(snippet.slice(0, 40))
+            if (idx >= 0) {
+              el.scrollTop = idx
+              el.style.outline = '2px solid #16a34a'
+              setTimeout(() => { el.style.outline = 'none' }, 1200)
+            }
+          }
+
+          return {
+            fileInput, selectedFile, selectedName, selectedSize, loading, results, progress, parsed, parsedBox, logs, logsBox, showLogs, health, toast,
+            agentNames, agentStates, prettyName, badgeClass, dotClass,
+            onSubmit, onDrop, onFileChange, locate, toggleLogs, resetAll, copyText, exportJSON, checkHealth
+          }
+        }
+      }).mount('#app')
+    </script>
+  </body>
+</html>

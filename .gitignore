@@ -1,3 +1,10 @@
+.vscode
+.DS_Store
+*/*.DS_Store
+.idea
+tmp
+test
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
