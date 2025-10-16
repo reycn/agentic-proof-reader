@@ -88,21 +88,36 @@
           <div class="p-5 border-b flex items-center justify-between">
             <h2 class="text-lg font-semibold">Results</h2>
             <div class="flex items-center gap-4">
-              <div class="text-sm text-gray-600" v-if="chunkResults.length">
+              <div class="text-sm text-gray-600" v-if="Object.keys(chunkResults).length">
                 {{ Object.keys(chunkResults).length }} chunks, {{ totalTasks }} tasks
+                <span v-if="totalPages > 1">(page {{ currentPage }} of {{ totalPages }})</span>
               </div>
-              <label class="inline-flex items-center gap-2 text-sm">
-                <div class="relative inline-block w-10 h-6">
-                  <input type="checkbox" v-model="showImportantOnly" class="sr-only peer" />
-                  <div class="w-10 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-gray-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-black peer-checked:ring-1   peer-checked:ring-black  "></div>
-                </div>
-                <span class="text-sm font-medium text-gray-700">Major Only</span>
-              </label>
+              <div class="flex items-center gap-4">
+                <input 
+                  v-model="searchQuery" 
+                  type="text" 
+                  placeholder="Search results..." 
+                  class="text-sm border rounded px-3 py-1 w-40"
+                  @input="currentPage = 1"
+                />
+                <label class="inline-flex items-center gap-2 text-sm">
+                  <div class="relative inline-block w-10 h-6">
+                    <input type="checkbox" v-model="showImportantOnly" class="sr-only peer" />
+                    <div class="w-10 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-gray-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-black peer-checked:ring-1   peer-checked:ring-black  "></div>
+                  </div>
+                  <span class="text-sm font-medium text-gray-700">Major Only</span>
+                </label>
+              </div>
             </div>
           </div>
 
             <div class="mt-0 p-5">
-              <h3 class="text-sm font-medium text-gray-700 mb-2 ">Agents</h3>
+              <div class="flex items-center justify-between mb-3">
+                <h3 class="text-sm font-medium text-gray-700">Agents</h3>
+                <div class="text-xs text-gray-500" v-if="Object.keys(chunkResults).length">
+                  {{ Object.keys(filteredChunkResults).length }} of {{ Object.keys(chunkResults).length }} chunks shown
+                </div>
+              </div>
               <div class="flex flex-wrap gap-2">
                 <template v-for="name in agentNames">
                   <span :key="name" class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full"
@@ -121,8 +136,40 @@
               <div class="text-sm text-gray-600">No results yet. Upload a file to begin.</div>
             </template> -->
 
+            <!-- Results Summary -->
+            <div v-if="Object.keys(chunkResults).length > 0" class="p-5 border-t bg-gray-50">
+              <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                <div class="text-center">
+                  <div class="font-medium text-gray-900">{{ totalFilteredTasks }}</div>
+                  <div class="text-gray-600">Total Issues</div>
+                </div>
+                <div class="text-center">
+                  <div class="font-medium text-red-600">{{ highImportanceCount }}</div>
+                  <div class="text-gray-600">High Priority</div>
+                </div>
+                <div class="text-center">
+                  <div class="font-medium text-gray-900">{{ Object.keys(filteredChunkResults).length }}</div>
+                  <div class="text-gray-600">Active Chunks</div>
+                </div>
+                <div class="text-center">
+                  <div class="font-medium text-gray-900">{{ averageImportance.toFixed(1) }}</div>
+                  <div class="text-gray-600">Avg Importance</div>
+                </div>
+              </div>
+            </div>
+            
             <!-- Distributed results view (always enabled) -->
-            <div v-for="(chunk, chunkId) in filteredChunkResults" :key="chunkId" class="border rounded-lg p-5 ">
+            <div v-if="Object.keys(paginatedChunkResults).length === 0 && !loading && Object.keys(chunkResults).length > 0" class="p-5 text-center text-gray-500">
+              No results match your current filters.
+            </div>
+            <div v-else-if="Object.keys(paginatedChunkResults).length === 0 && !loading" class="p-5 text-center text-gray-500">
+              No results to display.
+            </div>
+            <div v-for="(chunk, chunkId) in paginatedChunkResults" :key="chunkId" class="border rounded-lg p-5">
+              <div class="flex items-center justify-between mb-3">
+                <h3 class="text-sm font-medium text-gray-700">Chunk {{ parseInt(chunkId) + 1 }}</h3>
+                <span class="text-xs text-gray-500">{{ chunk.length }} results</span>
+              </div>
               <div class="p-4 space-y-3">
                 <div v-for="item in chunk" :key="`${chunkId}-${item.agent_name}`" class="border-l-4 pl-3" :class="importanceBorderClass(item.result.importance)">
                   <div class="flex items-center justify-between mb-2">
@@ -136,6 +183,38 @@
                     <div><span class="font-medium">Revision:</span> <span class="text-gray-800 rev-mark" v-html="item.result.highlighted"></span></div>
                   </div>
                 </div>
+              </div>
+            </div>
+            
+            <!-- Pagination controls -->
+            <div v-if="totalPages > 1" class="p-5 border-t flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <button 
+                  @click="goToPage(currentPage - 1)" 
+                  :disabled="currentPage <= 1"
+                  class="px-3 py-1 text-sm border rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                <span class="text-sm text-gray-600">
+                  Page {{ currentPage }} of {{ totalPages }}
+                </span>
+                <button 
+                  @click="goToPage(currentPage + 1)" 
+                  :disabled="currentPage >= totalPages"
+                  class="px-3 py-1 text-sm border rounded hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="text-sm text-gray-600">Items per page:</span>
+                <select v-model="itemsPerPage" @change="currentPage = 1" class="text-sm border rounded px-2 py-1">
+                  <option :value="5">5</option>
+                  <option :value="10">10</option>
+                  <option :value="20">20</option>
+                  <option :value="50">50</option>
+                </select>
               </div>
             </div>
         </section>
@@ -166,6 +245,11 @@
           const showLogs = ref(true)
           const health = ref('unknown')
           const toast = ref('')
+          
+          // Pagination state
+          const currentPage = ref(1)
+          const itemsPerPage = ref(10)
+          const searchQuery = ref('')
 
           const agentNames = [
             'linguistic_polishing',
@@ -243,6 +327,14 @@
             parsed.value = ''
             logs.value = []
             agentStates.value = Object.fromEntries(agentNames.map(n => [n, { status: 'pending', duration: '' }]))
+            currentPage.value = 1
+            searchQuery.value = ''
+          }
+          
+          const goToPage = (page) => {
+            if (page >= 1 && page <= totalPages.value) {
+              currentPage.value = page
+            }
           }
 
           const copyText = async (text) => { try { await navigator.clipboard.writeText(text || '') ; showToast('Copied') } catch {} }
@@ -385,23 +477,92 @@
           
           const filteredChunkResults = Vue.computed(() => {
             const filtered = {}
+            const query = searchQuery.value.toLowerCase().trim()
+            
             for (const [chunkId, chunk] of Object.entries(chunkResults.value)) {
+              let chunkItems = chunk
+              
+              // Apply importance filter
               if (showImportantOnly.value) {
-                const importantOnly = chunk.filter(item => (item.result.importance ?? 5) >= 8)
-                if (importantOnly.length > 0) {
-                  filtered[chunkId] = importantOnly
-                }
-              } else {
-                filtered[chunkId] = chunk
+                chunkItems = chunkItems.filter(item => (item.result.importance ?? 5) >= 8)
+              }
+              
+              // Apply search filter
+              if (query) {
+                chunkItems = chunkItems.filter(item => {
+                  const searchText = [
+                    item.result.problem || '',
+                    item.result.suggestion_brief || '',
+                    item.result.location || '',
+                    item.agent_name || ''
+                  ].join(' ').toLowerCase()
+                  return searchText.includes(query)
+                })
+              }
+              
+              if (chunkItems.length > 0) {
+                filtered[chunkId] = chunkItems
               }
             }
             return filtered
+          })
+          
+          const totalPages = Vue.computed(() => {
+            const totalChunks = Object.keys(filteredChunkResults.value).length
+            return Math.ceil(totalChunks / itemsPerPage.value)
+          })
+          
+          const paginatedChunkResults = Vue.computed(() => {
+            const entries = Object.entries(filteredChunkResults.value)
+            const start = (currentPage.value - 1) * itemsPerPage.value
+            const end = start + itemsPerPage.value
+            const paginated = entries.slice(start, end)
+            return Object.fromEntries(paginated)
+          })
+          
+          const totalFilteredTasks = Vue.computed(() => {
+            let total = 0
+            for (const chunk of Object.values(filteredChunkResults.value)) {
+              total += chunk.length
+            }
+            return total
+          })
+          
+          const highImportanceCount = Vue.computed(() => {
+            let count = 0
+            for (const chunk of Object.values(filteredChunkResults.value)) {
+              count += chunk.filter(item => (item.result.importance ?? 5) >= 8).length
+            }
+            return count
+          })
+          
+          const averageImportance = Vue.computed(() => {
+            let total = 0
+            let count = 0
+            for (const chunk of Object.values(filteredChunkResults.value)) {
+              for (const item of chunk) {
+                total += (item.result.importance ?? 5)
+                count++
+              }
+            }
+            return count > 0 ? total / count : 0
+          })
+          
+          // Reset to first page when filter changes
+          Vue.watch(showImportantOnly, () => {
+            currentPage.value = 1
+          })
+          
+          Vue.watch(searchQuery, () => {
+            currentPage.value = 1
           })
 
           return {
             fileInput, selectedFile, selectedName, selectedSize, loading, results, chunkResults, useDistributed, progress, parsed, parsedBox, logs, logsBox, showLogs, health, toast,
             agentNames, agentStates, prettyName, badgeClass, dotClass, importanceClass, importanceBorderClass, showImportantOnly, filteredResults, filteredChunkResults, totalTasks,
-            onSubmit, onDrop, onFileChange, locate, toggleLogs, resetAll, copyText, exportJSON, checkHealth
+            currentPage, itemsPerPage, totalPages, paginatedChunkResults, searchQuery,
+            totalFilteredTasks, highImportanceCount, averageImportance,
+            onSubmit, onDrop, onFileChange, locate, toggleLogs, resetAll, copyText, exportJSON, checkHealth, goToPage
           }
         }
       }).mount('#app')
