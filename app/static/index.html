@@ -196,9 +196,9 @@
                 >
                   Previous
                 </button>
-                <span class="text-sm text-gray-600">
+                <!-- <span class="text-sm text-gray-600">
                   Page {{ currentPage }} of {{ totalPages }}
-                </span>
+                </span> -->
                 <button 
                   @click="goToPage(currentPage + 1)" 
                   :disabled="currentPage >= totalPages"
@@ -280,15 +280,37 @@
           const showToast = (msg) => { toast.value = msg; setTimeout(() => { toast.value = '' }, 1800) }
 
           const parseAgentFromDetail = (stage, detail) => {
+            // Handle classic single-run stages
             if (stage === 'agent_start') return detail
             if (stage === 'agent_done') return (detail || '').split(' ')[0]
             if (stage === 'agent_timeout' || stage === 'agent_error') return (detail || '').split(':')[0]
+
+            // Handle distributed task stages: "Chunk X - agent_name" or with suffix ": error"
+            if (stage === 'task_start' || stage === 'task_done' || stage === 'task_error') {
+              const text = detail || ''
+              const dashIdx = text.indexOf('-')
+              if (dashIdx >= 0) {
+                const afterDash = text.slice(dashIdx + 1).trim()
+                // Remove trailing error/info after ':' if present
+                return afterDash.split(':')[0].trim()
+              }
+            }
             return ''
           }
 
           const updateAgentState = (stage, detail) => {
+            // Final stage: mark all agents done
+            if (stage === 'done') {
+              for (const n of Object.keys(agentStates.value)) {
+                agentStates.value[n].status = 'done'
+              }
+              return
+            }
+
             const name = parseAgentFromDetail(stage, detail)
             if (!name || !agentStates.value[name]) return
+
+            // Classic single-run updates
             if (stage === 'agent_start') agentStates.value[name].status = 'running'
             if (stage === 'agent_done') {
               agentStates.value[name].status = 'done'
@@ -297,6 +319,11 @@
             }
             if (stage === 'agent_timeout') agentStates.value[name].status = 'timeout'
             if (stage === 'agent_error') agentStates.value[name].status = 'error'
+
+            // Distributed task updates (best-effort aggregation)
+            if (stage === 'task_start') agentStates.value[name].status = 'running'
+            if (stage === 'task_done') agentStates.value[name].status = 'running' // keep running until final 'done'
+            if (stage === 'task_error') agentStates.value[name].status = 'error'
           }
 
           const onFileChange = (ev) => {
@@ -413,6 +440,11 @@
             parsed.value = ''
             logs.value = []
             agentStates.value = Object.fromEntries(agentNames.map(n => [n, { status: 'pending', duration: '' }]))
+            // Ensure pagination starts at the beginning for a new run
+            currentPage.value = 1
+            // Optional: clear search for new analysis to avoid empty views
+            // Comment out next line if you prefer keeping the previous query
+            // searchQuery.value = ''
             try {
               const form = new FormData()
               form.append('file', selectedFile.value)
@@ -427,6 +459,8 @@
               
               // Handle distributed results
               chunkResults.value = data.chunks || {}
+              // After results arrive, ensure we render from first page
+              currentPage.value = 1
               showLogs.value = false
             } catch (e) {
               logs.value.push(`Error: ${e?.message || e}`)
@@ -555,6 +589,18 @@
           
           Vue.watch(searchQuery, () => {
             currentPage.value = 1
+          })
+
+          // When the chunk results object reference changes (e.g., after a run), reset to page 1
+          Vue.watch(chunkResults, () => {
+            currentPage.value = 1
+          }, { deep: false })
+
+          // Clamp current page whenever total pages changes (e.g., due to filtering or itemsPerPage changes)
+          Vue.watch(totalPages, (newVal) => {
+            const maxPage = Math.max(1, newVal || 0)
+            if (currentPage.value > maxPage) currentPage.value = maxPage
+            if (currentPage.value < 1) currentPage.value = 1
           })
 
           return {
