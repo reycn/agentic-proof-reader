@@ -350,6 +350,201 @@ async def run_all_agents(
     )
 
 
+@dataclass
+class ChunkTask:
+    chunk_id: int
+    agent_name: AgentName
+    content: str
+
+
+@dataclass
+class ChunkTaskResult:
+    chunk_id: int
+    agent_name: AgentName
+    result: AgentResult
+
+
+async def run_all_agents_distributed(
+    content: str,
+    *,
+    timeout_seconds: int,
+    progress_cb: ProgressCb = None,
+    result_cb: ResultCb = None,
+) -> list[ChunkTaskResult]:
+    """
+    Run all 6 agents on each paragraph chunk of the content.
+    Creates m chunks × 6 agents = m×6 total tasks.
+    """
+    # Split content into paragraphs
+    chunks = chunk_by_paragraphs(content)
+
+    if progress_cb:
+        await progress_cb("chunking", f"Split into {len(chunks)} paragraphs")
+
+    # Create all tasks (m chunks × 6 agents)
+    agent_names: list[AgentName] = [
+        "linguistic_polishing",
+        "econometric_validation",
+        "theorization",
+        "precision",
+        "logical_reasoning",
+        "clarification",
+    ]
+
+    all_tasks: list[ChunkTask] = []
+    for chunk_id, chunk_content in enumerate(chunks):
+        for agent_name in agent_names:
+            all_tasks.append(
+                ChunkTask(
+                    chunk_id=chunk_id, agent_name=agent_name, content=chunk_content
+                )
+            )
+
+    if progress_cb:
+        await progress_cb(
+            "task_creation",
+            f"Created {len(all_tasks)} tasks ({len(chunks)} chunks × {len(agent_names)} agents)",
+        )
+
+    # Run all tasks asynchronously
+    async def run_chunk_task(task: ChunkTask) -> ChunkTaskResult:
+        if progress_cb:
+            await progress_cb(
+                "task_start", f"Chunk {task.chunk_id + 1} - {task.agent_name}"
+            )
+
+        try:
+            result = await run_agent(
+                task.agent_name,
+                task.content,
+                progress_cb=None,  # Don't pass progress_cb to individual agents to avoid spam
+            )
+
+            chunk_result = ChunkTaskResult(
+                chunk_id=task.chunk_id, agent_name=task.agent_name, result=result
+            )
+
+            if progress_cb:
+                await progress_cb(
+                    "task_done", f"Chunk {task.chunk_id + 1} - {task.agent_name}"
+                )
+
+            if result_cb:
+                await result_cb(chunk_result)
+
+            return chunk_result
+
+        except Exception as exc:
+            if progress_cb:
+                await progress_cb(
+                    "task_error",
+                    f"Chunk {task.chunk_id + 1} - {task.agent_name}: {exc}",
+                )
+
+            # Create error result
+            error_result = AgentResult(
+                name=task.agent_name,
+                problem=f"Task error: {exc}",
+                importance=1,
+                location="",
+                suggestion_brief="Retry or check provider availability.",
+                revised="",
+                highlighted="",
+            )
+
+            chunk_result = ChunkTaskResult(
+                chunk_id=task.chunk_id, agent_name=task.agent_name, result=error_result
+            )
+
+            if result_cb:
+                await result_cb(chunk_result)
+
+            return chunk_result
+
+    # Execute all tasks with timeout
+    try:
+        tasks = [run_chunk_task(task) for task in all_tasks]
+        results = await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True), timeout=timeout_seconds
+        )
+
+        # Filter out exceptions and convert to ChunkTaskResult
+        chunk_results: list[ChunkTaskResult] = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                if progress_cb:
+                    await progress_cb("task_exception", f"Task {i}: {result}")
+                # Create error result
+                task = all_tasks[i]
+                error_result = AgentResult(
+                    name=task.agent_name,
+                    problem=f"Task exception: {result}",
+                    importance=1,
+                    location="",
+                    suggestion_brief="Check system logs.",
+                    revised="",
+                    highlighted="",
+                )
+                chunk_results.append(
+                    ChunkTaskResult(
+                        chunk_id=task.chunk_id,
+                        agent_name=task.agent_name,
+                        result=error_result,
+                    )
+                )
+            else:
+                chunk_results.append(result)
+
+        if progress_cb:
+            await progress_cb("all_done", f"Completed {len(chunk_results)} tasks")
+
+        return chunk_results
+
+    except asyncio.TimeoutError:
+        if progress_cb:
+            await progress_cb("timeout", f"Overall timeout after {timeout_seconds}s")
+
+        # Return whatever results we have
+        return []
+
+
+def chunk_by_paragraphs(content: str) -> list[str]:
+    """Split content into paragraphs, filtering out empty ones."""
+    # Split by double newlines first, then by single newlines if needed
+    paragraphs = []
+
+    # Try splitting by double newlines (paragraph breaks)
+    chunks = re.split(r"\n\s*\n", content.strip())
+
+    for chunk in chunks:
+        chunk = chunk.strip()
+        if chunk and len(chunk) > 50:  # Filter out very short chunks
+            paragraphs.append(chunk)
+
+    # If no paragraphs found, try splitting by single newlines
+    if not paragraphs:
+        chunks = content.split("\n")
+        current_paragraph = []
+
+        for line in chunks:
+            line = line.strip()
+            if line:
+                current_paragraph.append(line)
+            elif current_paragraph:
+                paragraph = " ".join(current_paragraph)
+                if len(paragraph) > 50:
+                    paragraphs.append(paragraph)
+                current_paragraph = []
+
+        # Add the last paragraph if it exists
+        if current_paragraph:
+            paragraph = " ".join(current_paragraph)
+            if len(paragraph) > 50:
+                paragraphs.append(paragraph)
+
+    return paragraphs if paragraphs else [content]  # Fallback to original content
+
+
 def _strip_md(s: str) -> str:
     s = s.strip()
     s = re.sub(r"^\s*[-*]\s*", "", s)

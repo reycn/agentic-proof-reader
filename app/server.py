@@ -1,3 +1,12 @@
+"""
+Author: Rongxin rongxin@u.nus.edu
+Date: 2025-10-16 16:17:55
+LastEditors: Rongxin rongxin@u.nus.edu
+LastEditTime: 2025-10-16 20:13:59
+FilePath: /agentic-proof-reader/app/server.py
+Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -8,7 +17,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, WebSocket, WebSocketDisc
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .agents import run_all_agents
+from .agents import ChunkTaskResult, run_all_agents, run_all_agents_distributed
 from .config import settings
 from .parsers.latex_parser import parse_latex
 from .parsers.md_parser import parse_markdown
@@ -145,6 +154,88 @@ async def analyze(file: UploadFile) -> JSONResponse:
                     }
                     for r in results
                 ],
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        await report_progress("error", str(exc))
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/analyze-distributed")
+async def analyze_distributed(file: UploadFile) -> JSONResponse:
+    """Analyze document by splitting into chunks and running all agents."""
+
+    async def cb(stage: str, detail: str) -> None:
+        await report_progress(stage, detail)
+
+    async def rb(chunk_result: ChunkTaskResult) -> None:
+        # Stream each chunk task result as it completes
+        await manager.broadcast(
+            {
+                "stage": "chunk_result",
+                "detail": (
+                    f"Chunk {chunk_result.chunk_id + 1} - " f"{chunk_result.agent_name}"
+                ),
+                "chunk_id": chunk_result.chunk_id,
+                "agent_name": chunk_result.agent_name,
+                "result": {
+                    "name": chunk_result.result.name,
+                    "problem": chunk_result.result.problem,
+                    "importance": chunk_result.result.importance,
+                    "location": chunk_result.result.location,
+                    "suggestion_brief": chunk_result.result.suggestion_brief,
+                    "revised": chunk_result.result.revised,
+                    "suggestion": chunk_result.result.suggestion_brief,
+                    "highlighted": chunk_result.result.highlighted,
+                },
+            }
+        )
+
+    try:
+        await report_progress("upload", f"received {file.filename}")
+        data = await file.read()
+        await report_progress("parse", "parsing file")
+        text = parse_file_bytes(file.filename, data)
+        print(text) if text else print("No text found")
+
+        await report_progress("distributed_agents", "running distributed analysis")
+        chunk_results = await run_all_agents_distributed(
+            text,
+            timeout_seconds=settings.agent_timeout_seconds,
+            progress_cb=cb,
+            result_cb=rb,
+        )
+
+        await report_progress("done", f"completed {len(chunk_results)} chunk tasks")
+
+        # Organize results by chunk
+        chunks_data = {}
+        for chunk_result in chunk_results:
+            chunk_id = chunk_result.chunk_id
+            if chunk_id not in chunks_data:
+                chunks_data[chunk_id] = []
+            chunks_data[chunk_id].append(
+                {
+                    "agent_name": chunk_result.agent_name,
+                    "result": {
+                        "name": chunk_result.result.name,
+                        "problem": chunk_result.result.problem,
+                        "importance": chunk_result.result.importance,
+                        "location": chunk_result.result.location,
+                        "suggestion_brief": (chunk_result.result.suggestion_brief),
+                        "revised": chunk_result.result.revised,
+                        "suggestion": chunk_result.result.suggestion_brief,
+                        "highlighted": chunk_result.result.highlighted,
+                    },
+                }
+            )
+
+        return JSONResponse(
+            {
+                "parsed": text,
+                "total_chunks": len(chunks_data),
+                "total_tasks": len(chunk_results),
+                "chunks": chunks_data,
             }
         )
     except Exception as exc:  # noqa: BLE001
