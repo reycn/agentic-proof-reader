@@ -18,4 +18,3 @@ if __name__ == "__main__":
 
     # Run the serve command with default options
     typer.run(serve)
-    typer.run(serve)

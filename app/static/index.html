@@ -90,7 +90,7 @@
             <div class="flex items-center gap-4">
               <div class="text-sm text-gray-600" v-if="Object.keys(chunkResults).length">
                 {{ Object.keys(chunkResults).length }} chunks, {{ totalTasks }} tasks
-                <span v-if="totalPages > 1">(page {{ currentPage }} of {{ totalPages }})</span>
+                <!-- <span v-if="totalPages > 1">(page {{ currentPage }} of {{ totalPages }})</span> -->
               </div>
               <div class="flex items-center gap-4">
                 <input 
@@ -159,10 +159,10 @@
             </div>
             
             <!-- Distributed results view (always enabled) -->
-            <div v-if="Object.keys(paginatedChunkResults).length === 0 && !loading && Object.keys(chunkResults).length > 0" class="p-5 text-center text-gray-500">
+            <div v-if="!hasAnyFilteredResults && !loading && hasAnyResults" class="p-5 text-center text-gray-500">
               No results match your current filters.
             </div>
-            <div v-else-if="Object.keys(paginatedChunkResults).length === 0 && !loading" class="p-5 text-center text-gray-500">
+            <div v-else-if="!hasAnyResults && !loading" class="p-5 text-center text-gray-500">
               No results to display.
             </div>
             <div v-for="(chunk, chunkId) in paginatedChunkResults" :key="chunkId" class="border rounded-lg p-5">
@@ -236,7 +236,7 @@
           const results = ref([])
           const chunkResults = ref({})
           const useDistributed = ref(true)  // Always enabled
-          const showImportantOnly = ref(true)
+          const showImportantOnly = ref(false)
           const progress = ref([])
           const parsed = ref('')
           const parsedBox = ref(null)
@@ -409,21 +409,24 @@
                 // Handle chunk results
                 if (msg.stage === 'chunk_result' && msg.result) {
                   const chunkId = msg.chunk_id
-                  if (!chunkResults.value[chunkId]) {
-                    chunkResults.value[chunkId] = []
+                  // Create a new object to trigger Vue reactivity
+                  const updated = { ...chunkResults.value }
+                  if (!updated[chunkId]) {
+                    updated[chunkId] = []
                   }
-                  const existingIdx = chunkResults.value[chunkId].findIndex(x => x.agent_name === msg.agent_name)
+                  const existingIdx = updated[chunkId].findIndex(x => x.agent_name === msg.agent_name)
                   if (existingIdx >= 0) {
-                    chunkResults.value[chunkId][existingIdx] = {
+                    updated[chunkId][existingIdx] = {
                       agent_name: msg.agent_name,
                       result: msg.result
                     }
                   } else {
-                    chunkResults.value[chunkId].push({
+                    updated[chunkId].push({
                       agent_name: msg.agent_name,
                       result: msg.result
                     })
                   }
+                  chunkResults.value = updated
                 }
                 
                 nextTick(() => { const el = logsBox.value; if (el) el.scrollTop = el.scrollHeight })
@@ -457,8 +460,18 @@
               const data = await resp.json()
               // parsed.value is already set from WebSocket message
               
-              // Handle distributed results
-              chunkResults.value = data.chunks || {}
+              // Handle distributed results - merge with any streamed results instead of overwriting
+              const incoming = data.chunks || {}
+              const merged = { ...chunkResults.value }
+              for (const [cid, items] of Object.entries(incoming)) {
+                if (!merged[cid]) merged[cid] = []
+                for (const it of items) {
+                  const idx = merged[cid].findIndex(x => x.agent_name === it.agent_name)
+                  if (idx >= 0) merged[cid][idx] = it
+                  else merged[cid].push(it)
+                }
+              }
+              chunkResults.value = merged
               // After results arrive, ensure we render from first page
               currentPage.value = 1
               showLogs.value = false
@@ -546,6 +559,20 @@
             return Math.ceil(totalChunks / itemsPerPage.value)
           })
           
+          const hasAnyResults = Vue.computed(() => {
+            for (const chunk of Object.values(chunkResults.value)) {
+              if ((chunk || []).length > 0) return true
+            }
+            return false
+          })
+
+          const hasAnyFilteredResults = Vue.computed(() => {
+            for (const chunk of Object.values(filteredChunkResults.value)) {
+              if ((chunk || []).length > 0) return true
+            }
+            return false
+          })
+
           const paginatedChunkResults = Vue.computed(() => {
             const entries = Object.entries(filteredChunkResults.value)
             const start = (currentPage.value - 1) * itemsPerPage.value
@@ -603,10 +630,12 @@
             if (currentPage.value < 1) currentPage.value = 1
           })
 
+          // Keep user in control: do not auto-toggle importance filter
+
           return {
             fileInput, selectedFile, selectedName, selectedSize, loading, results, chunkResults, useDistributed, progress, parsed, parsedBox, logs, logsBox, showLogs, health, toast,
             agentNames, agentStates, prettyName, badgeClass, dotClass, importanceClass, importanceBorderClass, showImportantOnly, filteredResults, filteredChunkResults, totalTasks,
-            currentPage, itemsPerPage, totalPages, paginatedChunkResults, searchQuery,
+            currentPage, itemsPerPage, totalPages, paginatedChunkResults, searchQuery, hasAnyResults, hasAnyFilteredResults,
             totalFilteredTasks, highImportanceCount, averageImportance,
             onSubmit, onDrop, onFileChange, locate, toggleLogs, resetAll, copyText, exportJSON, checkHealth, goToPage
           }
